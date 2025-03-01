@@ -13,6 +13,7 @@ async function updateElement(
   } | null,
   fullHtml: string,
   gumId: string,
+  versionId: string | null,
 ) {
   // Only process element if it exists
   let elementData = element
@@ -41,6 +42,7 @@ async function updateElement(
       element: elementData,
       fullHtml,
       gumId,
+      versionId,
     }),
   });
 
@@ -53,11 +55,74 @@ export default function Editor({ initialHtml, gumId }: { initialHtml: string; gu
   const [isLoading, setIsLoading] = useState(false);
   const [editState, setEditState] = useState<"idle" | "typing">("idle");
   const inputValueRef = useRef("");
+  const [currentVersionId, setCurrentVersionId] = useState<string | null>(null);
 
   const resultsRef = useRef<HTMLDivElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   const [currentHtml, setCurrentHtml] = useState(initialHtml);
+  // Fetch the initial version ID when the component mounts
+  useEffect(() => {
+    async function fetchInitialVersion() {
+      try {
+        const response = await fetch(`/api/gum/${gumId}/latest-version`);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch initial version: ${response.statusText}`);
+        }
+        const version = await response.json();
+        setCurrentVersionId(version.id);
+      } catch (error) {
+        console.error("Failed to fetch initial version:", error);
+      }
+    }
+    fetchInitialVersion();
+  }, [gumId]);
+
+  // Handle undo action
+  const handleUndo = useCallback(async () => {
+    if (!currentVersionId) return;
+    try {
+      setIsLoading(true);
+      const response = await fetch(`/api/gum/${gumId}/version/${currentVersionId}/parent`);
+      if (!response.ok) {
+        if (response.status === 404) {
+          console.log("No previous version available");
+          return;
+        }
+        throw new Error(`Failed to fetch parent version: ${response.statusText}`);
+      }
+      const parentVersion = await response.json();
+      setCurrentVersionId(parentVersion.id);
+      setCurrentHtml(parentVersion.html);
+    } catch (error) {
+      console.error("Failed to undo:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [currentVersionId, gumId, setCurrentHtml, setIsLoading]);
+
+  // Handle redo action
+  const handleRedo = useCallback(async () => {
+    if (!currentVersionId) return;
+    try {
+      setIsLoading(true);
+      const response = await fetch(`/api/gum/${gumId}/version/${currentVersionId}/child`);
+      if (!response.ok) {
+        if (response.status === 404) {
+          console.log("No next version available");
+          return;
+        }
+        throw new Error(`Failed to fetch child version: ${response.statusText}`);
+      }
+      const childVersion = await response.json();
+      setCurrentVersionId(childVersion.id);
+      setCurrentHtml(childVersion.html);
+    } catch (error) {
+      console.error("Failed to redo:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [currentVersionId, gumId, setCurrentHtml, setIsLoading]);
 
   const handleSelection = () => {
     const selection = window.getSelection();
@@ -162,13 +227,22 @@ export default function Editor({ initialHtml, gumId }: { initialHtml: string; gu
           document.activeElement.blur();
         }
       }
+      // Add keyboard shortcuts for undo and redo
+      if (e.key === "z" && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+      }
+      if ((e.key === "y" && (e.metaKey || e.ctrlKey)) || (e.key === "z" && (e.metaKey || e.ctrlKey) && e.shiftKey)) {
+        e.preventDefault();
+        handleRedo();
+      }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, []);
+  }, [handleUndo, handleRedo]);
 
   const handleInputKeyDown = useCallback(
     async (e: KeyboardEvent) => {
@@ -208,7 +282,7 @@ export default function Editor({ initialHtml, gumId }: { initialHtml: string; gu
           fullHtml: resultsRef.current.innerHTML,
         });
 
-        const updatedHtml = await updateElement(
+        const data = await updateElement(
           inputValueRef.current,
           selectedElement
             ? {
@@ -219,9 +293,11 @@ export default function Editor({ initialHtml, gumId }: { initialHtml: string; gu
             : null,
           resultsRef.current.innerHTML,
           gumId,
+          currentVersionId,
         );
 
-        setCurrentHtml(updatedHtml);
+        setCurrentHtml(data.html);
+        setCurrentVersionId(data.version.id);
         setEditState("idle");
         input.value = "";
         inputValueRef.current = "";
@@ -232,7 +308,17 @@ export default function Editor({ initialHtml, gumId }: { initialHtml: string; gu
         setIsLoading(false);
       }
     },
-    [inputValueRef, resultsRef, selectedElement, setIsLoading, setEditState, setCurrentHtml, setSelectedElement, gumId],
+    [
+      inputValueRef,
+      resultsRef,
+      selectedElement,
+      setIsLoading,
+      setEditState,
+      setCurrentHtml,
+      setSelectedElement,
+      gumId,
+      currentVersionId,
+    ],
   );
 
   // Update iframe useEffect
@@ -347,7 +433,13 @@ export default function Editor({ initialHtml, gumId }: { initialHtml: string; gu
           animate={{ y: 0 }}
           transition={{ type: "spring", damping: 20, stiffness: 100 }}
         >
-          <CommandBar iFrameRef={iframeRef} editState={editState} isLoading={isLoading} />
+          <CommandBar
+            iFrameRef={iframeRef}
+            editState={editState}
+            isLoading={isLoading}
+            onUndo={handleUndo}
+            onRedo={handleRedo}
+          />
         </motion.div>
       </div>
     </>
@@ -358,10 +450,14 @@ function CommandBar({
   iFrameRef,
   editState,
   isLoading,
+  onUndo,
+  onRedo,
 }: {
   iFrameRef: RefObject<HTMLIFrameElement | null>;
   editState: "idle" | "typing";
   isLoading: boolean;
+  onUndo: () => void;
+  onRedo: () => void;
 }) {
   return (
     <motion.div
@@ -403,10 +499,28 @@ function CommandBar({
           />
         </div>
       ) : editState === "idle" ? (
-        <span className="flex items-center gap-1">
-          or <span style={{ backgroundColor: "rgb(255, 144, 232)", color: "black" }}>Highlight</span> or{" "}
-          <span className="text-black dark:text-white">Click</span>
-        </span>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onUndo}
+            className="flex items-center gap-1 rounded-md px-2 py-1 hover:bg-gray-100 dark:hover:bg-gray-700"
+            aria-label="Undo"
+          >
+            <Kbd symbol="⌘Z" />
+            <span>undo</span>
+          </button>
+          <button
+            onClick={onRedo}
+            className="flex items-center gap-1 rounded-md px-2 py-1 hover:bg-gray-100 dark:hover:bg-gray-700"
+            aria-label="Redo"
+          >
+            <Kbd symbol="⌘⇧Z" />
+            <span>redo</span>
+          </button>
+          <span className="flex items-center gap-1">
+            or <span style={{ backgroundColor: "rgb(255, 144, 232)", color: "black" }}>Highlight</span> or{" "}
+            <span className="text-black dark:text-white">Click</span>
+          </span>
+        </div>
       ) : editState === "typing" ? (
         <Kbd symbol="↵" />
       ) : null}

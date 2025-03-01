@@ -66,6 +66,7 @@ export async function POST(req: Request) {
   return new Response(
     JSON.stringify({
       html: version.html,
+      version: version,
       success: true,
     }),
     {
