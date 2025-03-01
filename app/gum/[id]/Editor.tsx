@@ -48,6 +48,45 @@ async function updateElement(
   return data.html;
 }
 
+async function deleteElement(
+  element: {
+    html: string;
+    tagName: string;
+    textContent: string;
+  } | null,
+  fullHtml: string,
+  gumId: string,
+) {
+  if (!element) return fullHtml;
+
+  try {
+    const normalizedOriginal = element.html.replace(/\s+/g, " ").trim();
+    const normalizedFullHtml = fullHtml.replace(/\s+/g, " ").trim();
+    // We don't use newHtml directly as we're using the API response
+    const newHtml = normalizedFullHtml.replace(normalizedOriginal, "");
+
+    const response = await fetch("/api/edit", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        text: "Delete this element",
+        element,
+        fullHtml,
+        gumId,
+        isDelete: true,
+      }),
+    });
+
+    const data = await response.json();
+    return data.html;
+  } catch (error) {
+    console.error("Failed to delete element:", error);
+    return fullHtml;
+  }
+}
+
 export default function Editor({ initialHtml, gumId }: { initialHtml: string; gumId: string }) {
   const [selectedElement, setSelectedElement] = useState<HTMLElement | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -162,13 +201,48 @@ export default function Editor({ initialHtml, gumId }: { initialHtml: string; gu
           document.activeElement.blur();
         }
       }
+      if (e.key === "Delete" && selectedElement && editState === "idle") {
+        e.preventDefault();
+        handleDeleteElement();
+      }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, []);
+  }, [selectedElement, editState, handleDeleteElement]);
+
+  const handleDeleteElement = useCallback(async () => {
+    if (!selectedElement || !resultsRef.current) return;
+    try {
+      setIsLoading(true);
+      console.log("Deleting element:", {
+        element: {
+          html: selectedElement.outerHTML,
+          tagName: selectedElement.tagName,
+          textContent: selectedElement.textContent || "",
+        },
+        fullHtml: resultsRef.current.innerHTML,
+      });
+      const updatedHtml = await deleteElement(
+        {
+          html: selectedElement.outerHTML,
+          tagName: selectedElement.tagName,
+          textContent: selectedElement.textContent || "",
+        },
+        resultsRef.current.innerHTML,
+        gumId,
+      );
+      setCurrentHtml(updatedHtml);
+      setEditState("idle");
+      setSelectedElement(null);
+    } catch (error) {
+      console.error("Failed to delete element:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [selectedElement, resultsRef, setIsLoading, setEditState, setCurrentHtml, setSelectedElement, gumId]);
 
   const handleInputKeyDown = useCallback(
     async (e: KeyboardEvent) => {
@@ -347,7 +421,13 @@ export default function Editor({ initialHtml, gumId }: { initialHtml: string; gu
           animate={{ y: 0 }}
           transition={{ type: "spring", damping: 20, stiffness: 100 }}
         >
-          <CommandBar iFrameRef={iframeRef} editState={editState} isLoading={isLoading} />
+          <CommandBar
+            iFrameRef={iframeRef}
+            editState={editState}
+            isLoading={isLoading}
+            selectedElement={selectedElement}
+            onDeleteElement={handleDeleteElement}
+          />
         </motion.div>
       </div>
     </>
@@ -358,10 +438,14 @@ function CommandBar({
   iFrameRef,
   editState,
   isLoading,
+  selectedElement,
+  onDeleteElement,
 }: {
   iFrameRef: RefObject<HTMLIFrameElement | null>;
   editState: "idle" | "typing";
   isLoading: boolean;
+  selectedElement: HTMLElement | null;
+  onDeleteElement: () => void;
 }) {
   return (
     <motion.div
@@ -403,10 +487,20 @@ function CommandBar({
           />
         </div>
       ) : editState === "idle" ? (
-        <span className="flex items-center gap-1">
-          or <span style={{ backgroundColor: "rgb(255, 144, 232)", color: "black" }}>Highlight</span> or{" "}
-          <span className="text-black dark:text-white">Click</span>
-        </span>
+        <>
+          <span className="flex items-center gap-1">
+            or <span style={{ backgroundColor: "rgb(255, 144, 232)", color: "black" }}>Highlight</span> or{" "}
+            <span className="text-black dark:text-white">Click</span>
+          </span>
+          {selectedElement && (
+            <button
+              onClick={onDeleteElement}
+              className="ml-2 rounded-md bg-red-500 px-2 py-1 text-xs text-white hover:bg-red-600"
+            >
+              Delete <Kbd symbol="Del" />
+            </button>
+          )}
+        </>
       ) : editState === "typing" ? (
         <Kbd symbol="↵" />
       ) : null}

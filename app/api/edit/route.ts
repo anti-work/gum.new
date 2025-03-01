@@ -17,7 +17,7 @@ export async function POST(req: Request) {
     return new Response("Unauthorized", { status: 401 });
   }
 
-  const { text, element, fullHtml, gumId, versionId } = await req.json();
+  const { text, element, fullHtml, gumId, versionId, isDelete } = await req.json();
 
   const gum = await db.query.gums.findFirst({
     where: (gums, { eq }) => eq(gums.id, gumId),
@@ -27,7 +27,9 @@ export async function POST(req: Request) {
     return new Response("Unauthorized", { status: 401 });
   }
 
-  const prompt = editLandingPagePrompt(text, element.html);
+  const prompt = isDelete
+    ? `Remove this element completely from the HTML: ${element.html}`
+    : editLandingPagePrompt(text, element.html);
 
   const { partialObjectStream } = streamObject({
     model: anthropic("claude-3-7-sonnet-20250219") || openai("gpt-4o-mini"),
