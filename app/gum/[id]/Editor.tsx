@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback, RefObject } from "react";
-import Image from "next/image";
 import { motion } from "framer-motion";
 
 async function updateElement(
@@ -120,6 +119,22 @@ export default function Editor({ initialHtml, gumId }: { initialHtml: string; gu
       document.removeEventListener("click", handleClick);
     };
   }, [editState, selectedElement]);
+
+  // Add progress animation
+  useEffect(() => {
+    const style = document.createElement("style");
+    style.textContent = `
+      @keyframes progressAnimation {
+        0% { width: 0%; }
+        60% { width: 80%; }
+        100% { width: 100%; }
+      }
+    `;
+    document.head.appendChild(style);
+    return () => {
+      document.head.removeChild(style);
+    };
+  }, []);
 
   // Handle keyboard shortcuts if the input isn't focused
   useEffect(() => {
@@ -361,19 +376,19 @@ function CommandBar({
         <div
           className={`absolute bottom-1.5 left-[6px] h-0.5 w-[calc(100%-12px)] ${editState === "typing" ? "bg-[#ff90e8]" : "bg-gray-500"}`}
         ></div>
+        {isLoading && (
+          <div className="absolute bottom-1.5 left-[6px] h-0.5 w-[calc(100%-12px)] overflow-hidden">
+            <div
+              className="h-full bg-black dark:bg-[#ff90e8]"
+              style={{
+                width: "0%",
+                animation: "progressAnimation 4s cubic-bezier(0.1, 0.5, 0.5, 1) forwards",
+              }}
+            ></div>
+          </div>
+        )}
       </div>
-      {isLoading ? (
-        <div className="relative h-5 w-5">
-          <Image
-            src="/icon.png"
-            alt="Loading..."
-            width={20}
-            height={20}
-            className="h-full w-full animate-spin"
-            style={{ animationDuration: "1s" }}
-          />
-        </div>
-      ) : editState === "idle" ? (
+      {editState === "idle" ? (
         <span className="flex items-center gap-1">
           or <span className="text-black dark:text-white">Click</span>
         </span>
